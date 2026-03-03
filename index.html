@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Snake Quiz</title>
+  <style>
+    :root {
+      --bg: #0f1222;
+      --panel: #181d35;
+      --grid: #232a4a;
+      --snake: #4ade80;
+      --snake-head: #22c55e;
+      --text: #e8ecff;
+      --muted: #9aa4d2;
+      --correct: #34d399;
+      --wrong: #fb7185;
+      --answer: #60a5fa;
+      --answer-correct: #f59e0b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at top, #1b2240 0%, var(--bg) 65%);
+      color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      padding: 16px;
+    }
+
+    .game {
+      width: min(96vw, 760px);
+      background: linear-gradient(180deg, #1d2342, #151a31);
+      border: 1px solid #2f3863;
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 16px 45px rgba(0, 0, 0, 0.35);
+    }
+
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .question-wrap {
+      flex: 1;
+      min-height: 48px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      margin-bottom: 3px;
+    }
+
+    #question {
+      margin: 0;
+      font-size: 1.05rem;
+      line-height: 1.3;
+    }
+
+    .score {
+      text-align: right;
+      min-width: 85px;
+    }
+
+    #flash {
+      margin: 8px 0 10px;
+      font-weight: 700;
+      min-height: 1.3rem;
+      text-align: center;
+      opacity: 0;
+      transition: opacity 0.18s ease;
+    }
+
+    #flash.show { opacity: 1; }
+    #flash.correct { color: var(--correct); }
+    #flash.wrong { color: var(--wrong); }
+
+    .board-wrap {
+      position: relative;
+      width: fit-content;
+      margin: 0 auto;
+    }
+
+    canvas {
+      display: block;
+      background: #0d1124;
+      border: 1px solid #2e365f;
+      border-radius: 8px;
+      image-rendering: pixelated;
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(9, 12, 24, 0.72);
+      border-radius: 8px;
+    }
+
+    #overlay.show { display: flex; }
+
+    .overlay-card {
+      background: #1f2647;
+      border: 1px solid #3b4575;
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+      width: min(90%, 260px);
+    }
+
+    .overlay-card h2 {
+      margin: 0 0 6px;
+      font-size: 1.35rem;
+    }
+
+    .overlay-card p {
+      margin: 0 0 12px;
+      color: var(--muted);
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 12px;
+      font: inherit;
+      font-weight: 700;
+      color: #0f1222;
+      background: #93c5fd;
+      cursor: pointer;
+    }
+
+    .controls {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <main class="game">
+    <div class="hud">
+      <div class="question-wrap">
+        <div class="label">Question</div>
+        <p id="question"></p>
+      </div>
+      <div class="score">
+        <div class="label">Score</div>
+        <div id="score">0</div>
+      </div>
+    </div>
+
+    <div id="flash" aria-live="polite"></div>
+
+    <div class="board-wrap">
+      <canvas id="board" width="600" height="600"></canvas>
+      <div id="overlay">
+        <div class="overlay-card">
+          <h2>Game Over</h2>
+          <p id="final-score"></p>
+          <button id="restart">Restart</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="controls">Move with Arrow Keys or WASD.</p>
+  </main>
+
+  <script>
+    const questions = [
+      {
+        prompt: "What type of rhetoric appeals to the audience's emotions?",
+        choices: ["Ethos", "Logos", "Pathos", "Telos"],
+        correctIndex: 2,
+      },
+      {
+        prompt: "The wind kissed my cheeks as I lay on Mother Earth.",
+        choices: ["Personification", "Metaphor", "Simile", "Hyperbole"],
+        correctIndex: 0,
+      },
+    ];
+
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    const questionEl = document.getElementById('question');
+    const scoreEl = document.getElementById('score');
+    const flashEl = document.getElementById('flash');
+    const overlay = document.getElementById('overlay');
+    const finalScore = document.getElementById('final-score');
+    const restartBtn = document.getElementById('restart');
+
+    const gridSize = 25;
+    const cellSize = canvas.width / gridSize;
+    const tickMs = 135;
+    const minDotDistance = 6;
+
+    let snake;
+    let direction;
+    let nextDirection;
+    let score;
+    let alive;
+    let growPending;
+    let currentQuestion;
+    let answerDots;
+    let loopId;
+
+    function randInt(max) {
+      return Math.floor(Math.random() * max);
+    }
+
+    function pickQuestion() {
+      return questions[randInt(questions.length)];
+    }
+
+    function sameCell(a, b) {
+      return a.x === b.x && a.y === b.y;
+    }
+
+    function manhattan(a, b) {
+      return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+    }
+
+    function showFlash(text, type) {
+      flashEl.textContent = text;
+      flashEl.className = `${type} show`;
+      setTimeout(() => {
+        flashEl.className = '';
+      }, 420);
+    }
+
+    function placeAnswerDots() {
+      const head = snake[0];
+      const taken = new Set(snake.map(seg => `${seg.x},${seg.y}`));
+      const dots = [];
+
+      for (let i = 0; i < currentQuestion.choices.length; i++) {
+        let attempts = 0;
+        let pos;
+
+        do {
+          pos = { x: randInt(gridSize), y: randInt(gridSize) };
+          attempts++;
+
+          const key = `${pos.x},${pos.y}`;
+          const conflictWithDot = dots.some(dot => dot.x === pos.x && dot.y === pos.y);
+          const tooClose = manhattan(pos, head) < minDotDistance;
+
+          if (!taken.has(key) && !conflictWithDot && !tooClose) {
+            break;
+          }
+
+          if (attempts > 500) {
+            break;
+          }
+        } while (true);
+
+        dots.push({
+          x: pos.x,
+          y: pos.y,
+          label: currentQuestion.choices[i],
+          isCorrect: i === currentQuestion.correctIndex,
+        });
+      }
+
+      answerDots = dots;
+    }
+
+    function loadRound() {
+      currentQuestion = pickQuestion();
+      questionEl.textContent = currentQuestion.prompt;
+      placeAnswerDots();
+    }
+
+    function resetGame() {
+      snake = [
+        { x: 12, y: 12 },
+        { x: 11, y: 12 },
+        { x: 10, y: 12 },
+      ];
+      direction = { x: 1, y: 0 };
+      nextDirection = { x: 1, y: 0 };
+      score = 0;
+      growPending = 0;
+      alive = true;
+      scoreEl.textContent = score;
+      flashEl.textContent = '';
+      flashEl.className = '';
+      overlay.classList.remove('show');
+
+      loadRound();
+      draw();
+
+      clearInterval(loopId);
+      loopId = setInterval(gameTick, tickMs);
+    }
+
+    function endGame() {
+      alive = false;
+      clearInterval(loopId);
+      finalScore.textContent = `Final score: ${score}`;
+      overlay.classList.add('show');
+    }
+
+    function handleAnswerCollision(dot) {
+      if (dot.isCorrect) {
+        score += 1;
+        growPending += 1;
+        showFlash('Correct!', 'correct');
+      } else {
+        if (snake.length <= 2) {
+          showFlash('Wrong!', 'wrong');
+          draw();
+          endGame();
+          return;
+        }
+        snake.pop();
+        showFlash('Wrong!', 'wrong');
+      }
+
+      scoreEl.textContent = score;
+      loadRound();
+    }
+
+    function gameTick() {
+      if (!alive) return;
+
+      direction = nextDirection;
+      const newHead = {
+        x: snake[0].x + direction.x,
+        y: snake[0].y + direction.y,
+      };
+
+      const hitWall = newHead.x < 0 || newHead.y < 0 || newHead.x >= gridSize || newHead.y >= gridSize;
+      const hitSelf = snake.some(seg => sameCell(seg, newHead));
+
+      if (hitWall || hitSelf) {
+        draw(newHead);
+        endGame();
+        return;
+      }
+
+      snake.unshift(newHead);
+
+      const touchedDot = answerDots.find(dot => sameCell(dot, newHead));
+      if (touchedDot) {
+        handleAnswerCollision(touchedDot);
+      }
+
+      if (growPending > 0) {
+        growPending -= 1;
+      } else {
+        snake.pop();
+      }
+
+      draw();
+    }
+
+    function drawGrid() {
+      ctx.strokeStyle = '#232a4a';
+      ctx.lineWidth = 1;
+      for (let i = 1; i < gridSize; i++) {
+        const p = i * cellSize;
+        ctx.beginPath();
+        ctx.moveTo(p, 0);
+        ctx.lineTo(p, canvas.height);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(0, p);
+        ctx.lineTo(canvas.width, p);
+        ctx.stroke();
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawGrid();
+
+      for (const dot of answerDots) {
+        const cx = dot.x * cellSize + cellSize / 2;
+        const cy = dot.y * cellSize + cellSize / 2;
+
+        ctx.fillStyle = dot.isCorrect ? '#f59e0b' : '#60a5fa';
+        ctx.beginPath();
+        ctx.arc(cx, cy, cellSize * 0.28, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#e8ecff';
+        ctx.font = `${Math.max(10, Math.floor(cellSize * 0.44))}px system-ui`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(dot.label, cx, cy - cellSize * 0.35);
+      }
+
+      snake.forEach((seg, i) => {
+        const x = seg.x * cellSize;
+        const y = seg.y * cellSize;
+        ctx.fillStyle = i === 0 ? '#22c55e' : '#4ade80';
+        ctx.fillRect(x + 2, y + 2, cellSize - 4, cellSize - 4);
+      });
+    }
+
+    function setDirection(nx, ny) {
+      if (!alive) return;
+      if (nx === -direction.x && ny === -direction.y) return;
+      nextDirection = { x: nx, y: ny };
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const key = e.key.toLowerCase();
+
+      if (["arrowup", "arrowdown", "arrowleft", "arrowright", "w", "a", "s", "d"].includes(key)) {
+        e.preventDefault();
+      }
+
+      if (key === 'arrowup' || key === 'w') setDirection(0, -1);
+      if (key === 'arrowdown' || key === 's') setDirection(0, 1);
+      if (key === 'arrowleft' || key === 'a') setDirection(-1, 0);
+      if (key === 'arrowright' || key === 'd') setDirection(1, 0);
+    });
+
+    restartBtn.addEventListener('click', resetGame);
+
+    resetGame();
+  </script>
+</body>
+</html>
